@@ -1,12 +1,85 @@
-# README
+# 🔥 Testfire Dev VS Code Extension
 
-## Using with Local Ollama Model
+[![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![VS Code Marketplace](https://vsmarketplacebadge.apphb.com/version/jagtarsinghwork.ext-testfire.dev-vs-code.svg)](https://marketplace.visualstudio.com/items?itemName=jagtarsinghwork.ext-testfire.dev-vs-code)
+[![GitHub Stars](https://img.shields.io/github/stars/jagtarsinghwork/ext-testfire.dev-vs-code?style=social)](https://github.com/jagtarsinghwork/ext-testfire.dev-vs-code)
 
-To use this extension with a local Ollama model (v0.1), see the detailed setup guide in [OLLAMA_LOCAL_SETUP.md](./OLLAMA_LOCAL_SETUP.md).
+## 🚀 Next-Gen AI Coding with Local Ollama
 
-This includes instructions for downloading models, running the Ollama server, and configuring the extension for local AI completions.
+Testfire Dev is an open-source Visual Studio Code extension that brings advanced AI code completion, chat, and code analysis to your editor—powered by your own local Ollama models (v0.1+). No cloud required. 100% privacy. Fast, free, and developer-friendly.
 
-...existing code...
+---
+
+### ✨ Features
+
+- AI code completion and chat (local Ollama)
+- Works offline—no data leaves your machine
+- Supports multiple models (Llama2, etc.)
+- Easy setup and configuration
+- Open source and MIT licensed
+
+---
+
+## 🛠️ Quick Start
+
+1. **Install Ollama v0.1+** ([Ollama GitHub](https://github.com/jmorganca/ollama))
+2. **Download a model:**
+
+```sh
+ollama pull llama2
+```
+
+3. **Start Ollama server:**
+
+```sh
+ollama serve
+```
+
+4. **Install this extension in VS Code**
+5. **Configure the extension** (set endpoint to `http://localhost:11434`)
+6. **Start coding with AI!**
+
+For full setup, see [OLLAMA_LOCAL_SETUP.md](./OLLAMA_LOCAL_SETUP.md).
+
+---
+
+## 📚 Documentation
+
+- [Ollama Local Setup Guide](./OLLAMA_LOCAL_SETUP.md)
+- [Extension Features](./GIT_FEATURES.md)
+- [Quick Start Routing](./QUICK_START_ROUTING.md)
+
+---
+
+## 🤝 Contributing
+
+We welcome issues, feature requests, and pull requests! See [CONTRIBUTING.md](./CONTRIBUTING.md) (or open an issue to get started).
+
+---
+
+## 📢 Keywords
+
+AI, Ollama, VS Code, Code Completion, Llama2, Open Source, Local AI, Privacy, Developer Tools, Chat, Coding Assistant
+
+---
+
+## 📄 License
+
+MIT — see [LICENSE](./LICENSE)
+
+---
+
+## ⭐️ Star & Share
+
+If you find this project useful, please star the repo and share it with your friends and colleagues!
+
+---
+
+## 🔗 Links
+
+- [GitHub Repository](https://github.com/jagtarsinghwork/ext-testfire.dev-vs-code)
+- [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=jagtarsinghwork.ext-testfire.dev-vs-code)
+- [Ollama Documentation](https://github.com/jmorganca/ollama)
 
 # TestFire AI Agent 🔥
 
