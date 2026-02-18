@@ -3,6 +3,10 @@
   "displayName": "TestFire AI Agent",
   "description": "TestFire.dev - AI-powered coding agent with project awareness, multi-file editing, autonomous task execution, and Cursor-like chat interface",
   "version": "0.1.0",
+  "repository": {
+  "type": "git",
+  "url": "https://github.com/jagtarsinghwork/ext-testfire.dev-vs-code.git"
+  },
   "engines": {
     "vscode": "^1.109.0"
   },
