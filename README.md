@@ -1,7 +1,7 @@
 # 🔥 Testfire Dev VS Code Extension
 
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![VS Code Marketplace](https://vsmarketplacebadge.apphb.com/version/jagtarsinghwork.ext-testfire.dev-vs-code.svg)](https://marketplace.visualstudio.com/items?itemName=jagtarsinghwork.ext-testfire.dev-vs-code)
+[![Visual Studio Marketplace Version](https://img.shields.io/visual-studio-marketplace/v/jagtarsinghwork.ext-testfire.dev-vs-code?label=VS%20Code%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=jagtarsinghwork.ext-testfire.dev-vs-code)
 [![GitHub Stars](https://img.shields.io/github/stars/jagtarsinghwork/ext-testfire.dev-vs-code?style=social)](https://github.com/jagtarsinghwork/ext-testfire.dev-vs-code)
 
 ## 🚀 Next-Gen AI Coding with Local Ollama
