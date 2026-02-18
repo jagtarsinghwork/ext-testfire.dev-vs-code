@@ -1,0 +1,305 @@
+/**
+ * Tests for the Test Generation System
+ */
+
+import { TestGenerator } from '../TestGenerator';
+import {
+  getTemplate,
+  generateMockData,
+  getTestPattern,
+} from '../TestTemplates';
+import { TestAnalyzer } from '../TestAnalyzer';
+
+describe('Test Generation System', () => {
+  describe('TestGenerator', () => {
+    let generator: TestGenerator;
+
+    beforeEach(() => {
+      generator = new TestGenerator();
+    });
+
+    it('should parse TypeScript function correctly', () => {
+      const sourceCode = `
+                export function add(a: number, b: number): number {
+                    return a + b;
+                }
+            `;
+
+      const functionInfo = generator.parseFunctionInfo(sourceCode, 'math.ts');
+
+      expect(functionInfo).toBeDefined();
+      expect(functionInfo?.name).toBe('add');
+      expect(functionInfo?.parameters).toHaveLength(2);
+      expect(functionInfo?.returnType).toContain('number');
+      expect(functionInfo?.isAsync).toBe(false);
+    });
+
+    it('should parse async function correctly', () => {
+      const sourceCode = `
+                export async function fetchData(url: string): Promise<any> {
+                    return await fetch(url);
+                }
+            `;
+
+      const functionInfo = generator.parseFunctionInfo(sourceCode, 'api.ts');
+
+      expect(functionInfo).toBeDefined();
+      expect(functionInfo?.isAsync).toBe(true);
+      expect(functionInfo?.returnType).toContain('Promise');
+    });
+
+    it('should generate tests for simple function', async () => {
+      const sourceCode = `
+                export function multiply(x: number, y: number): number {
+                    return x * y;
+                }
+            `;
+
+      const functionInfo = generator.parseFunctionInfo(sourceCode, 'math.ts');
+      const result = await generator.generateTests(functionInfo!, {
+        framework: 'jest',
+        includeEdgeCases: true,
+        includeErrorCases: true,
+      });
+
+      expect(result).toBeDefined();
+      expect(result.framework).toBe('jest');
+      expect(result.testCount).toBeGreaterThan(0);
+      expect(result.code).toContain('describe');
+      expect(result.code).toContain('it');
+      expect(result.code).toContain('expect');
+    });
+
+    it('should detect framework from workspace', async () => {
+      const framework = await generator.detectFramework();
+      expect(framework).toBeDefined();
+      expect(['jest', 'mocha', 'pytest', 'testing']).toContain(framework);
+    });
+
+    it('should generate edge case tests', async () => {
+      const sourceCode = `
+                export function divide(a: number, b: number): number {
+                    if (b === 0) throw new Error('Division by zero');
+                    return a / b;
+                }
+            `;
+
+      const functionInfo = generator.parseFunctionInfo(sourceCode, 'math.ts');
+      const result = await generator.generateTests(functionInfo!, {
+        includeEdgeCases: true,
+        includeErrorCases: true,
+      });
+
+      expect(result.code).toContain('0');
+      expect(result.code).toContain('null');
+    });
+  });
+
+  describe('TestTemplates', () => {
+    it('should get Jest template', () => {
+      const template = getTemplate('jest');
+      expect(template).toBeDefined();
+      expect(template?.framework).toBe('jest');
+    });
+
+    it('should get Mocha template', () => {
+      const template = getTemplate('mocha');
+      expect(template).toBeDefined();
+      expect(template?.framework).toBe('mocha');
+    });
+
+    it('should get Pytest template', () => {
+      const template = getTemplate('pytest');
+      expect(template).toBeDefined();
+      expect(template?.framework).toBe('pytest');
+    });
+
+    it('should generate mock data for different types', () => {
+      expect(generateMockData('string')).toContain('test-string');
+      expect(generateMockData('number')).toMatch(/\d+/);
+      expect(generateMockData('boolean')).toMatch(/true|false/);
+      expect(generateMockData('array')).toContain('[');
+      expect(generateMockData('object')).toContain('{');
+    });
+
+    it('should get test pattern', () => {
+      const pattern = getTestPattern('AAA');
+      expect(pattern).toBeDefined();
+      expect(pattern?.name).toContain('Arrange-Act-Assert');
+    });
+
+    it('should create Jest assertions', () => {
+      const template = getTemplate('jest')!;
+
+      const assertion = template.assertion.equal('result', 'expected');
+      expect(assertion).toContain('expect');
+      expect(assertion).toContain('toEqual');
+    });
+
+    it('should create mock function', () => {
+      const template = getTemplate('jest')!;
+
+      const mock = template.mock.create('mockFn');
+      expect(mock).toContain('jest.fn');
+    });
+  });
+
+  describe('TestAnalyzer', () => {
+    let analyzer: TestAnalyzer;
+
+    beforeEach(() => {
+      analyzer = new TestAnalyzer();
+    });
+
+    it('should detect test framework from content', async () => {
+      const jestContent = `
+                import { describe, it, expect } from '@jest/globals';
+                describe('test', () => {
+                    it('should work', () => {
+                        expect(true).toBe(true);
+                    });
+                });
+            `;
+
+      // Create temp file and analyze
+      const fs = require('fs');
+      const path = require('path');
+      const tempFile = path.join(__dirname, 'temp-jest.spec.ts');
+      fs.writeFileSync(tempFile, jestContent);
+
+      try {
+        const info = await analyzer.analyzeTestFile(tempFile);
+        expect(info.framework).toBe('jest');
+        expect(info.testCount).toBeGreaterThan(0);
+      } finally {
+        fs.unlinkSync(tempFile);
+      }
+    });
+
+    it('should analyze test quality', async () => {
+      const testContent = `
+                import { describe, it, expect } from '@jest/globals';
+                describe('calculator', () => {
+                    it('should add numbers correctly', () => {
+                        const result = 2 + 2;
+                        expect(result).toBe(4);
+                    });
+                });
+            `;
+
+      const fs = require('fs');
+      const path = require('path');
+      const tempFile = path.join(__dirname, 'temp-quality.spec.ts');
+      fs.writeFileSync(tempFile, testContent);
+
+      try {
+        const quality = await analyzer.analyzeTestQuality(tempFile);
+        expect(quality.score).toBeGreaterThan(0);
+        expect(quality.score).toBeLessThanOrEqual(100);
+        expect(quality.metrics).toBeDefined();
+      } finally {
+        fs.unlinkSync(tempFile);
+      }
+    });
+
+    it('should identify flaky tests', async () => {
+      const flakyContent = `
+                import { describe, it, expect } from '@jest/globals';
+                describe('flaky tests', () => {
+                    it('uses random', () => {
+                        const id = Math.random();
+                        expect(id).toBeDefined();
+                    });
+                    it('uses date', () => {
+                        const now = new Date();
+                        expect(now).toBeDefined();
+                    });
+                });
+            `;
+
+      const fs = require('fs');
+      const path = require('path');
+      const tempFile = path.join(__dirname, 'temp-flaky.spec.ts');
+      fs.writeFileSync(tempFile, flakyContent);
+
+      try {
+        const flakyTests = await analyzer.identifyFlakyTests(tempFile);
+        expect(flakyTests.length).toBeGreaterThan(0);
+      } finally {
+        fs.unlinkSync(tempFile);
+      }
+    });
+
+    it('should get workspace test statistics', async () => {
+      const stats = await analyzer.getTestStatistics();
+      expect(stats).toBeDefined();
+      expect(stats.totalTests).toBeGreaterThanOrEqual(0);
+      expect(stats.totalSuites).toBeGreaterThanOrEqual(0);
+    });
+
+    it('should clear cache', () => {
+      analyzer.clearCache();
+      // Should not throw
+      expect(true).toBe(true);
+    });
+  });
+
+  describe('Integration Tests', () => {
+    it('should generate and analyze test in one flow', async () => {
+      const generator = new TestGenerator();
+      const analyzer = new TestAnalyzer();
+
+      // Generate test
+      const sourceCode = `
+                export function subtract(a: number, b: number): number {
+                    return a - b;
+                }
+            `;
+
+      const functionInfo = generator.parseFunctionInfo(sourceCode, 'math.ts');
+      const generatedTest = await generator.generateTests(functionInfo!);
+
+      expect(generatedTest).toBeDefined();
+      expect(generatedTest.code).toContain('describe');
+
+      // Write to temp file and analyze
+      const fs = require('fs');
+      const path = require('path');
+      const tempFile = path.join(__dirname, 'temp-integration.spec.ts');
+      fs.writeFileSync(tempFile, generatedTest.code);
+
+      try {
+        const quality = await analyzer.analyzeTestQuality(tempFile);
+        expect(quality.score).toBeGreaterThan(0);
+      } finally {
+        fs.unlinkSync(tempFile);
+      }
+    });
+
+    it('should handle multiple frameworks', async () => {
+      const generator = new TestGenerator();
+      const sourceCode = `
+                export function greet(name: string): string {
+                    return 'Hello, ' + name;
+                }
+            `;
+
+      const functionInfo = generator.parseFunctionInfo(
+        sourceCode,
+        'greeter.ts',
+      );
+
+      // Test Jest
+      const jestTest = await generator.generateTests(functionInfo!, {
+        framework: 'jest',
+      });
+      expect(jestTest.code).toContain('jest');
+
+      // Test Mocha
+      const mochaTest = await generator.generateTests(functionInfo!, {
+        framework: 'mocha',
+      });
+      expect(mochaTest.code).toContain('mocha');
+    });
+  });
+});

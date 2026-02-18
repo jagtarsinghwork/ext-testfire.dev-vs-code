@@ -1,0 +1,442 @@
+{
+  "name": "testfire-dev",
+  "displayName": "TestFire AI Agent",
+  "description": "TestFire.dev - AI-powered coding agent with project awareness, multi-file editing, autonomous task execution, and Cursor-like chat interface",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.109.0"
+  },
+  "categories": [
+    "AI",
+    "Programming Languages",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "testfire-dev.openChat",
+        "title": "Open AI Chat",
+        "category": "TestFire",
+        "icon": "$(hubot)"
+      },
+      {
+        "command": "testfire-dev.openLegacyChat",
+        "title": "Open Legacy Chat",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.askAI",
+        "title": "Ask AI (Custom Prompt)",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.explainCode",
+        "title": "Explain Code",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.improveCode",
+        "title": "Improve Code",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.addTests",
+        "title": "Add Unit Tests",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.optimizeCode",
+        "title": "Optimize Performance",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.documentCode",
+        "title": "Add Documentation",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.findBugs",
+        "title": "Find Bugs & Issues",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.refactorCode",
+        "title": "Refactor Code",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.convertLanguage",
+        "title": "Convert to Another Language",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.runAgent",
+        "title": "Run AI Agent (Autonomous Task)",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.analyzeProject",
+        "title": "Analyze Project",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.generateComponent",
+        "title": "Generate Component/Module",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.refactorProject",
+        "title": "Refactor Project",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.fixAllIssues",
+        "title": "Fix All Issues",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.generateTests",
+        "title": "Generate Tests for Current File",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.addFeature",
+        "title": "Add Feature (Agent Mode)",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.showFileTree",
+        "title": "Show File Tree",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.reindex",
+        "title": "Re-index Workspace",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.cancelCurrentTask",
+        "title": "Cancel Current Task",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.aiFix",
+        "title": "AI Fix",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.aiRefactor",
+        "title": "AI Refactor",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.aiExplain",
+        "title": "AI Explain",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.showMemory",
+        "title": "Show Code Memory",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.learnCurrentFile",
+        "title": "Learn Current File",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.rememberPreference",
+        "title": "Remember Preference",
+        "category": "TestFire"
+      },
+      {
+        "command": "testfire-dev.usePai",
+        "title": "Analyze with Pai (MCP)",
+        "category": "TestFire"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "testfire-dev.openChat",
+        "key": "ctrl+shift+i",
+        "mac": "cmd+shift+i"
+      },
+      {
+        "command": "testfire-dev.askAI",
+        "key": "ctrl+shift+a",
+        "mac": "cmd+shift+a",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "testfire-dev.explainCode",
+        "key": "ctrl+shift+e",
+        "mac": "cmd+shift+e",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "testfire-dev.runAgent",
+        "key": "ctrl+shift+g",
+        "mac": "cmd+shift+g"
+      },
+      {
+        "command": "testfire-dev.analyzeProject",
+        "key": "ctrl+shift+p",
+        "mac": "cmd+shift+p"
+      },
+      {
+        "command": "testfire-dev.generateTests",
+        "key": "ctrl+shift+t",
+        "mac": "cmd+shift+t",
+        "when": "editorTextFocus"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "testfire-dev.explainCode",
+          "group": "testfire@1",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "testfire-dev.improveCode",
+          "group": "testfire@2",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "testfire-dev.addTests",
+          "group": "testfire@3",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "testfire-dev.optimizeCode",
+          "group": "testfire@4",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "testfire-dev.documentCode",
+          "group": "testfire@5",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "testfire-dev.findBugs",
+          "group": "testfire@6",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "testfire-dev.refactorCode",
+          "group": "testfire@7",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "testfire-dev.aiRefactor",
+          "group": "testfire@8",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "testfire-dev.aiExplain",
+          "group": "testfire@9",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "testfire-dev.askAI",
+          "group": "testfire@10",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "testfire-dev.openChat",
+          "group": "testfire@11"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "testfire-dev.reindex",
+          "when": "view == testfireFileTree",
+          "group": "navigation"
+        }
+      ]
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "testfireFileTree",
+          "name": "TestFire Files",
+          "when": "workspaceFolderCount > 0"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "TestFire AI",
+      "properties": {
+        "testfire.provider": {
+          "type": "string",
+          "default": "ollama",
+          "enum": [
+            "ollama",
+            "openai",
+            "anthropic"
+          ],
+          "enumDescriptions": [
+            "Ollama (local, private)",
+            "OpenAI API (GPT-4, etc.)",
+            "Anthropic API (Claude, etc.)"
+          ],
+          "description": "AI provider to use"
+        },
+        "testfire.providerUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:11434",
+          "description": "Base URL for the AI provider API"
+        },
+        "testfire.model": {
+          "type": "string",
+          "default": "deepseek-coder:6.7b",
+          "description": "Model to use (e.g., deepseek-coder:6.7b, gpt-4, claude-sonnet-4-5-20250929)"
+        },
+        "testfire.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for OpenAI/Anthropic (not needed for Ollama)"
+        },
+        "testfire.maxTokens": {
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum tokens in AI response"
+        },
+        "testfire.temperature": {
+          "type": "number",
+          "default": 0.7,
+          "minimum": 0,
+          "maximum": 2,
+          "description": "AI response temperature (0 = deterministic, 2 = creative)"
+        },
+        "testfire.embeddingModel": {
+          "type": "string",
+          "default": "nomic-embed-text",
+          "description": "Model to use for embeddings (Ollama: nomic-embed-text, OpenAI: text-embedding-3-small)"
+        },
+        "testfire.enableHover": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable AI-powered hover information"
+        },
+        "testfire.enableCompletions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable AI-powered code completions"
+        },
+        "testfire.enableQuickFix": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable AI-powered quick fixes and code actions"
+        },
+        "testfire.contextMaxChars": {
+          "type": "number",
+          "default": 12000,
+          "description": "Maximum characters to include in AI context"
+        },
+        "testfire.maxFileSizeKB": {
+          "type": "number",
+          "default": 100,
+          "description": "Maximum file size in KB to scan (larger files are skipped)"
+        },
+        "testfire.showPreviewBeforeApply": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show diff preview and require approval before applying changes"
+        },
+        "testfire.showPlanBeforeExecute": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show execution plan and require approval before running autonomous tasks"
+        },
+        "testfire.enableExplanations": {
+          "type": "boolean",
+          "default": true,
+          "description": "Generate educational explanations for AI suggestions and changes"
+        },
+        "testfire.enableTaskTracking": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show task progress and tracking in chat interface"
+        },
+        "testfire.autoExplain": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically generate explanations for all suggestions (may be slower)"
+        },
+        "testfire.thoroughnessLevel": {
+          "type": "string",
+          "default": "balanced",
+          "enum": [
+            "fast",
+            "balanced",
+            "thorough"
+          ],
+          "enumDescriptions": [
+            "Quick responses, minimal file analysis",
+            "Balance between speed and thoroughness",
+            "Deep analysis, examines all relevant files"
+          ],
+          "description": "How thorough the AI should be when analyzing code"
+        },
+        "testfire.routing.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable smart model routing - automatically select best model for each task"
+        },
+        "testfire.routing.showDecisions": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show routing decisions in the output log"
+        },
+        "testfire.routing.prioritizeSpeed": {
+          "type": "boolean",
+          "default": false,
+          "description": "Prefer faster models when routing"
+        },
+        "testfire.routing.prioritizeCost": {
+          "type": "boolean",
+          "default": true,
+          "description": "Prefer cost-effective models when routing"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.19.11",
+    "@types/vscode": "^1.109.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.27.2",
+    "eslint": "^9.39.2",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.54.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@types/node-fetch": "^2.6.13",
+    "axios": "^1.13.5",
+    "node-fetch": "^3.3.2",
+    "sqlite3": "^5.1.7"
+  }
+}

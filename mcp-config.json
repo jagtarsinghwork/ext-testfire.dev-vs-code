@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "pai-assistant": {
+      "command": "node",
+      "args": ["dist/mcp/paiServer.js"],
+      "env": {
+        "PAI_API_KEY": "sk-e2b45913cd774a4aa534a913c1dc788c"
+      }
+    },
+    "ollama": {
+      "command": "ollama",
+      "args": ["run", "deepseek-coder:6.7b"]
+    }
+  }
+}
