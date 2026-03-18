@@ -11,6 +11,11 @@ import {
   MultiFileEdit,
   TaskList,
 } from '../types';
+import {
+  AgentWebviewMessage,
+  AgentExtensionMessage,
+  AgentRole,
+} from '../types/agents';
 import { ContextBuilder } from '../context/ContextBuilder';
 import { FileChangeManager } from '../files/FileChangeManager';
 import { MultiFileEditor } from '../files/MultiFileEditor';
@@ -22,6 +27,9 @@ import { taskManager } from '../utils/taskManager';
 import { ExplanationGenerator } from '../utils/explanationGenerator';
 import { ModelRouter } from '../routing/ModelRouter';
 import { PerformanceTracker } from '../routing/PerformanceTracker';
+import { AgentOrchestrator } from '../orchestrator/AgentOrchestrator';
+import { KnowledgeBase } from '../knowledge/KnowledgeBase';
+import { ToolRegistry } from '../tools/ToolRegistry';
 import { Logger } from '../utils/Logger';
 
 /**
@@ -35,6 +43,9 @@ import { Logger } from '../utils/Logger';
  */
 export class AgentChatPanel {
   public static currentPanel: AgentChatPanel | undefined;
+  private static sharedOrchestrator: AgentOrchestrator | null = null;
+  private static sharedKnowledgeBase: KnowledgeBase | null = null;
+  private static sharedToolRegistry: ToolRegistry | null = null;
   private panel: vscode.WebviewPanel;
   private session: ChatSession;
   private disposables: vscode.Disposable[] = [];
@@ -47,6 +58,10 @@ export class AgentChatPanel {
   private availableModels: string[] = [];
   private availableProviders: Map<AIProviderType, AIProvider> = new Map();
   private currentTaskId: string | null = null;
+  private orchestrator: AgentOrchestrator | null = null;
+  private knowledgeBase: KnowledgeBase | null = null;
+  private toolRegistry: ToolRegistry | null = null;
+  private activeAgentId: string = 'auto';
 
   private constructor(
     panel: vscode.WebviewPanel,
@@ -65,10 +80,10 @@ export class AgentChatPanel {
     this.performanceTracker = new PerformanceTracker(context);
     this.modelRouter = new ModelRouter(context, this.performanceTracker);
     this.explanationGenerator = new ExplanationGenerator(provider);
-    
+
     // Initialize available providers map
     this.availableProviders.set(provider.config.type, provider);
-    
+
     this.panel.webview.html = this.getHtmlContent();
     this.panel.webview.onDidReceiveMessage(
       (msg: WebviewMessage) => this.handleMessage(msg),
@@ -76,7 +91,7 @@ export class AgentChatPanel {
       this.disposables,
     );
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
-    
+
     // Initialize model list
     this.loadAvailableModels();
   }
@@ -117,11 +132,41 @@ export class AgentChatPanel {
       agentController,
       scanner,
     );
+    // Auto-connect orchestrator if previously registered
+    if (
+      AgentChatPanel.sharedOrchestrator &&
+      AgentChatPanel.sharedKnowledgeBase &&
+      AgentChatPanel.sharedToolRegistry
+    ) {
+      AgentChatPanel.currentPanel.connectOrchestrator(
+        AgentChatPanel.sharedOrchestrator,
+        AgentChatPanel.sharedKnowledgeBase,
+        AgentChatPanel.sharedToolRegistry,
+      );
+    }
     return AgentChatPanel.currentPanel;
   }
 
   updateProvider(provider: AIProvider): void {
     this.provider = provider;
+  }
+
+  /**
+   * Connect the multi-agent orchestrator, knowledge base, and tool registry.
+   */
+  connectOrchestrator(
+    orchestrator: AgentOrchestrator,
+    knowledgeBase: KnowledgeBase,
+    toolRegistry: ToolRegistry,
+  ): void {
+    this.orchestrator = orchestrator;
+    this.knowledgeBase = knowledgeBase;
+    this.toolRegistry = toolRegistry;
+    // Store statically so future createOrShow calls auto-connect
+    AgentChatPanel.sharedOrchestrator = orchestrator;
+    AgentChatPanel.sharedKnowledgeBase = knowledgeBase;
+    AgentChatPanel.sharedToolRegistry = toolRegistry;
+    this.logger.info('Orchestrator connected with agent system');
   }
 
   private createSession(): ChatSession {
@@ -138,7 +183,9 @@ export class AgentChatPanel {
     this.panel.webview.postMessage(msg);
   }
 
-  private async handleMessage(msg: WebviewMessage): Promise<void> {
+  private async handleMessage(
+    msg: WebviewMessage | AgentWebviewMessage,
+  ): Promise<void> {
     switch (msg.type) {
       case 'ready':
         this.postMessage({
@@ -146,24 +193,49 @@ export class AgentChatPanel {
           messages: this.session.messages,
         });
         this.checkProviderStatus();
+        // Send agent list if orchestrator is connected
+        if (this.orchestrator) {
+          this.panel.webview.postMessage({
+            type: 'agentList',
+            agents: this.orchestrator.getAgentConfigs(),
+          });
+        }
+        if (this.toolRegistry) {
+          this.panel.webview.postMessage({
+            type: 'toolList',
+            tools: this.toolRegistry.getDefinitions(),
+          });
+        }
         break;
       case 'sendMessage':
-        await this.handleUserMessage(msg.content, msg.contextFiles);
+        await this.handleUserMessage(
+          (msg as any).content,
+          (msg as any).contextFiles,
+        );
         break;
       case 'cancelRequest':
         this.provider.abort();
+        if (this.orchestrator) {
+          this.orchestrator.cancel();
+        }
         break;
       case 'applyAction':
-        await this.handleApplyAction(msg.messageId, msg.actionIndex);
+        await this.handleApplyAction(
+          (msg as any).messageId,
+          (msg as any).actionIndex,
+        );
         break;
       case 'applyAllActions':
-        await this.handleApplyAllActions(msg.messageId);
+        await this.handleApplyAllActions((msg as any).messageId);
         break;
       case 'undoAction':
-        await this.handleUndo(msg.operationId);
+        await this.handleUndo((msg as any).operationId);
         break;
       case 'newSession':
         this.session = this.createSession();
+        if (this.orchestrator) {
+          this.orchestrator.clearAllHistory();
+        }
         this.postMessage({ type: 'chatHistory', messages: [] });
         break;
       case 'getFileTree':
@@ -173,29 +245,58 @@ export class AgentChatPanel {
         }
         break;
       case 'addContextFile':
-        this.contextBuilder.addContextFile(msg.filePath);
+        this.contextBuilder.addContextFile((msg as any).filePath);
         this.postMessage({
           type: 'contextUpdate',
           files: this.contextBuilder.getContextFiles(),
         });
         break;
       case 'removeContextFile':
-        this.contextBuilder.removeContextFile(msg.filePath);
+        this.contextBuilder.removeContextFile((msg as any).filePath);
         this.postMessage({
           type: 'contextUpdate',
           files: this.contextBuilder.getContextFiles(),
         });
         break;
       case 'executeAgent':
-        await this.handleAgentExecution(msg.goal);
+        await this.handleAgentExecution((msg as any).goal);
         break;
       case 'cancelAgent':
         this.agentController.cancel();
+        if (this.orchestrator) {
+          this.orchestrator.cancel();
+        }
         break;
       case 'acceptPlan':
-        await this.handleAcceptPlan(msg.planId);
+        await this.handleAcceptPlan((msg as any).planId);
         break;
       case 'rejectPlan':
+        break;
+      case 'switchAgent':
+        this.activeAgentId = (msg as any).agentId;
+        this.logger.info(`Switched to agent: ${this.activeAgentId}`);
+        break;
+      case 'runWorkflow':
+        await this.handleWorkflow(
+          (msg as any).workflowType,
+          (msg as any).input,
+        );
+        break;
+      case 'getAgents':
+        if (this.orchestrator) {
+          this.panel.webview.postMessage({
+            type: 'agentList',
+            agents: this.orchestrator.getAgentConfigs(),
+          });
+        }
+        break;
+      case 'getTools':
+        if (this.toolRegistry) {
+          this.panel.webview.postMessage({
+            type: 'toolList',
+            tools: this.toolRegistry.getDefinitions(),
+          });
+        }
         break;
       case 'acceptChange':
         this.multiFileEditor.setFileAccepted(msg.editId, msg.fileIndex, true);
@@ -244,8 +345,10 @@ export class AgentChatPanel {
   private async loadAvailableModels(): Promise<void> {
     try {
       this.availableModels = await this.provider.listModels();
-      this.logger.debug('Loaded available models', { count: this.availableModels.length });
-      
+      this.logger.debug('Loaded available models', {
+        count: this.availableModels.length,
+      });
+
       // Send to UI
       this.postMessage({
         type: 'modelList',
@@ -269,26 +372,28 @@ export class AgentChatPanel {
   private async handleSelectModel(model: string): Promise<void> {
     try {
       this.logger.info('Switching to model', { model });
-      
+
       // Update provider config
       this.provider.config.model = model;
-      
+
       // Persist to workspace state
       await this.context.workspaceState.update('testfire.selectedModel', model);
-      
+
       // Update UI
       this.postMessage({
         type: 'modelChanged',
         model,
       });
-      
+
       // Update status bar
       await this.checkProviderStatus();
-      
+
       vscode.window.showInformationMessage(`Switched to model: ${model}`);
     } catch (error: any) {
       this.logger.error('Failed to switch model', { error: error.message });
-      vscode.window.showErrorMessage(`Failed to switch model: ${error.message}`);
+      vscode.window.showErrorMessage(
+        `Failed to switch model: ${error.message}`,
+      );
     }
   }
 
@@ -297,7 +402,9 @@ export class AgentChatPanel {
    */
   registerProvider(provider: AIProvider): void {
     this.availableProviders.set(provider.config.type, provider);
-    this.logger.info('Registered provider for routing', { provider: provider.name });
+    this.logger.info('Registered provider for routing', {
+      provider: provider.name,
+    });
   }
 
   private async handleUserMessage(
@@ -335,8 +442,7 @@ export class AgentChatPanel {
         messageId: assistantMsg.id,
         error: err.message,
       });
-      
-      // Record failure in performance tracker
+
       if (this.currentTaskId) {
         this.performanceTracker.completeTask(this.currentTaskId, false, {
           errorMessage: err.message,
@@ -345,63 +451,67 @@ export class AgentChatPanel {
       }
     };
 
+    const streamCallback: AIStreamCallback = {
+      onToken: (token) => {
+        assistantMsg.content += token;
+        this.postMessage({
+          type: 'streamToken',
+          messageId: assistantMsg.id,
+          token,
+        });
+      },
+      onComplete: (fullResponse) => {
+        assistantMsg.content = fullResponse;
+        assistantMsg.isStreaming = false;
+        const actions = this.parseActionsFromResponse(fullResponse);
+        this.postMessage({
+          type: 'streamComplete',
+          messageId: assistantMsg.id,
+          content: fullResponse,
+          actions: actions.length > 0 ? actions : undefined,
+        });
+      },
+      onError: sendError,
+    };
+
     try {
-      // Smart routing: Select best model for this query
-      const routingEnabled = vscode.workspace.getConfiguration('testfire.routing').get('enabled', true);
-      let selectedProvider = this.provider;
-      
-      if (routingEnabled && this.availableProviders.size > 1) {
+      const selectedCode = this.contextBuilder.getSelectedCode();
+      let agentContext = '';
+      if (selectedCode) {
+        agentContext += `Selected code from ${selectedCode.filePath} (${selectedCode.language}):\n\`\`\`\n${selectedCode.text}\n\`\`\`\n`;
+      }
+
+      // Always auto-route through orchestrator when available
+      if (this.orchestrator) {
         try {
-          const routingDecision = await this.modelRouter.route(
+          const result = await this.orchestrator.processRequest(
             content,
-            this.provider,
-            this.availableProviders,
-            {
-              language: this.contextBuilder.getSelectedCode()?.language,
+            agentContext,
+            (event) => {
+              this.panel.webview.postMessage({
+                type: 'orchestratorEvent',
+                event,
+              } as any);
             },
+            streamCallback,
           );
-          
-          this.logger.info('Routing decision', {
-            model: routingDecision.selectedModel,
-            provider: routingDecision.selectedProvider,
-            reason: routingDecision.reason,
-            confidence: routingDecision.confidence,
-          });
-          
-          // Use routed provider if different
-          const routedProvider = this.availableProviders.get(routingDecision.selectedProvider);
-          if (routedProvider && routingDecision.selectedModel) {
-            selectedProvider = routedProvider;
-            selectedProvider.config.model = routingDecision.selectedModel;
-            
-            // Notify user of routing decision (optional)
-            const showRouting = vscode.workspace.getConfiguration('testfire.routing').get('showDecisions', false);
-            if (showRouting && routingDecision.selectedModel !== this.provider.config.model) {
-              this.logger.info(`🤖 Routing to ${routingDecision.selectedModel}: ${routingDecision.reason}`);
-            }
+
+          // Send workflow metadata to UI
+          if (result.responses.length > 0) {
+            this.panel.webview.postMessage({
+              type: 'workflowResult',
+              result,
+            } as any);
           }
-          
-          // Start tracking this task
-          if (routingDecision.classification) {
-            this.currentTaskId = `task_${Date.now()}`;
-            this.performanceTracker.startTask(
-              this.currentTaskId,
-              routingDecision.classification.type,
-              selectedProvider.config.model,
-              selectedProvider.config.type,
-              {
-                language: this.contextBuilder.getSelectedCode()?.language,
-              },
-            );
-          }
-        } catch (routingError: any) {
-          this.logger.warn('Routing failed, using default provider', {
-            error: routingError.message,
-          });
+
+          this.session.updatedAt = Date.now();
+          return;
+        } catch (err: any) {
+          this.logger.warn(`Orchestrator failed, falling back: ${err.message}`);
         }
       }
-      
-      const selectedCode = this.contextBuilder.getSelectedCode();
+
+      // Fallback: single-provider path
       const messages = await this.contextBuilder.buildMessages(
         content,
         selectedCode,
@@ -413,81 +523,115 @@ export class AgentChatPanel {
         }
       }
 
-      const callback: AIStreamCallback = {
-        onToken: (token) => {
-          assistantMsg.content += token;
-          this.postMessage({
-            type: 'streamToken',
-            messageId: assistantMsg.id,
-            token,
-          });
-        },
-        onComplete: async (fullResponse) => {
-          assistantMsg.content = fullResponse;
-          assistantMsg.isStreaming = false;
-          const actions = this.parseActionsFromResponse(fullResponse);
-          
-          // Record successful completion in performance tracker
-          if (this.currentTaskId) {
-            this.performanceTracker.completeTask(this.currentTaskId, true);
-          }
-          
-          let preview: MultiFileEdit | undefined;
-          let explanation: string | undefined;
-          
-          // Generate preview if enabled and actions exist
-          const config = vscode.workspace.getConfiguration('testfire');
-          const showPreview = config.get<boolean>('showPreviewBeforeApply', true);
-          const enableExplanations = config.get<boolean>('enableExplanations', true);
-          
-          if (actions.length > 0) {
-            assistantMsg.actions = actions;
-            
-            // Generate preview for file changes
-            if (showPreview && actions[0].files.length > 0) {
-              const editId = `edit_${Date.now()}`;
-              preview = createFileChangePreview(
-                actions[0].files,
-                editId,
-                actions[0].description,
-              );
-              assistantMsg.preview = preview;
-              assistantMsg.requiresApproval = true;
-              this.pendingApprovals.set(editId, preview);
-            }
-            
-            // Generate explanation if enabled
-            if (enableExplanations && actions[0].reasoning) {
-              try {
-                explanation = await this.explanationGenerator.explainRefactoring(
-                  actions[0].description,
-                  actions[0].files.map(f => f.file),
-                  actions[0].reasoning,
-                );
-                assistantMsg.explanation = explanation;
-              } catch (error) {
-                console.error('Failed to generate explanation:', error);
-              }
-            }
-          }
-          
-          this.postMessage({
-            type: 'streamComplete',
-            messageId: assistantMsg.id,
-            content: fullResponse,
-            actions: actions.length > 0 ? actions : undefined,
-            explanation,
-            preview,
-          });
-        },
-        onError: sendError,
-      };
-
-      await selectedProvider.chat(messages, callback);
+      await this.provider.chat(messages, streamCallback);
     } catch (error: any) {
       sendError(error);
     }
     this.session.updatedAt = Date.now();
+  }
+
+  /**
+   * Handle multi-agent workflow execution
+   */
+  private async handleWorkflow(
+    workflowType: string,
+    input: string,
+  ): Promise<void> {
+    if (!this.orchestrator) {
+      vscode.window.showWarningMessage(
+        'Multi-agent orchestrator not initialized',
+      );
+      return;
+    }
+
+    const userMsg: ChatMessage = {
+      id: `msg_${Date.now()}`,
+      role: 'user',
+      content: `[Workflow: ${workflowType}] ${input}`,
+      timestamp: Date.now(),
+    };
+    this.session.messages.push(userMsg);
+
+    const assistantMsg: ChatMessage = {
+      id: `msg_${Date.now() + 1}`,
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+      isStreaming: true,
+    };
+    this.session.messages.push(assistantMsg);
+
+    try {
+      const selectedCode = this.contextBuilder.getSelectedCode();
+      let context = '';
+      if (selectedCode) {
+        context += `\nSelected code from ${selectedCode.filePath} (${selectedCode.language}):\n\`\`\`\n${selectedCode.text}\n\`\`\`\n`;
+      }
+
+      const result = await this.orchestrator.processRequest(
+        input,
+        context,
+        (event) => {
+          // Send orchestrator events to the UI
+          this.panel.webview.postMessage({ type: 'orchestratorEvent', event });
+          if (event.type === 'agent_start' && event.agentId) {
+            this.panel.webview.postMessage({
+              type: 'agentThinking',
+              agentId: event.agentId,
+              role: (event.data as any)?.role || 'coder',
+            });
+          }
+          if (event.type === 'agent_complete' && event.data) {
+            this.panel.webview.postMessage({
+              type: 'agentResponse',
+              response: event.data,
+            });
+          }
+        },
+        {
+          onToken: (token) => {
+            assistantMsg.content += token;
+            this.postMessage({
+              type: 'streamToken',
+              messageId: assistantMsg.id,
+              token,
+            });
+          },
+          onComplete: (fullResponse) => {
+            // Will be handled below
+          },
+          onError: (err) => {
+            this.postMessage({
+              type: 'streamError',
+              messageId: assistantMsg.id,
+              error: err.message,
+            });
+          },
+        },
+      );
+
+      assistantMsg.content = result.finalResponse;
+      assistantMsg.isStreaming = false;
+
+      this.postMessage({
+        type: 'streamComplete',
+        messageId: assistantMsg.id,
+        content: result.finalResponse,
+      });
+
+      // Send workflow result
+      this.panel.webview.postMessage({
+        type: 'workflowResult',
+        result,
+      });
+    } catch (error: any) {
+      assistantMsg.isStreaming = false;
+      this.postMessage({
+        type: 'streamError',
+        messageId: assistantMsg.id,
+        error: error.message,
+      });
+    }
   }
 
   private parseActionsFromResponse(response: string): AIAction[] {
@@ -625,22 +769,24 @@ export class AgentChatPanel {
     }
 
     message.approved = true;
-    
+
     // Record user feedback
     if (this.currentTaskId) {
       this.performanceTracker.recordFeedback(this.currentTaskId, 'accepted');
       this.currentTaskId = null;
     }
-    
+
     try {
       // Apply the changes
       await this.multiFileEditor.applyEdit(message.preview.id);
       vscode.window.showInformationMessage('Changes applied successfully!');
-      
+
       // Remove from pending approvals
       this.pendingApprovals.delete(message.preview.id);
     } catch (error: any) {
-      vscode.window.showErrorMessage(`Failed to apply changes: ${error.message}`);
+      vscode.window.showErrorMessage(
+        `Failed to apply changes: ${error.message}`,
+      );
     }
   }
 
@@ -655,13 +801,13 @@ export class AgentChatPanel {
 
     message.approved = false;
     this.pendingApprovals.delete(message.preview.id);
-    
+
     // Record user feedback
     if (this.currentTaskId) {
       this.performanceTracker.recordFeedback(this.currentTaskId, 'rejected');
       this.currentTaskId = null;
     }
-    
+
     vscode.window.showInformationMessage('Changes rejected');
   }
 
@@ -675,23 +821,25 @@ export class AgentChatPanel {
     }
 
     const action = message.actions[0];
-    
+
     try {
       const explanation = await this.explanationGenerator.explainRefactoring(
         action.description,
-        action.files.map(f => f.file),
+        action.files.map((f) => f.file),
         action.reasoning,
       );
-      
+
       message.explanation = explanation;
-      
+
       this.postMessage({
         type: 'explanation',
         messageId,
         explanation,
       });
     } catch (error: any) {
-      vscode.window.showErrorMessage(`Failed to generate explanation: ${error.message}`);
+      vscode.window.showErrorMessage(
+        `Failed to generate explanation: ${error.message}`,
+      );
     }
   }
 
@@ -711,7 +859,7 @@ export class AgentChatPanel {
       taskId,
       status,
     );
-    
+
     if (success) {
       this.postMessage({
         type: 'taskUpdate',
@@ -726,31 +874,47 @@ export class AgentChatPanel {
   // This class acts as the bridge between the UI and new module architecture.
 
   private getHtmlContent(): string {
-    // Import the HTML from the existing ChatPanel
-    // For now, return a redirect to open the original panel
     const nonce = getNonce();
     return `<!DOCTYPE html><html><head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <style>
+*{box-sizing:border-box}
 body{font-family:var(--vscode-font-family);color:var(--vscode-editor-foreground);background:var(--vscode-editor-background);height:100vh;display:flex;flex-direction:column;overflow:hidden;margin:0;padding:0}
-.header{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-sideBar-background);min-height:44px}
+.header{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-sideBar-background)}
 .header-left{display:flex;align-items:center;gap:10px}
-.header-logo{width:24px;height:24px;border-radius:4px;background:linear-gradient(135deg,#667eea,#764ba2);display:flex;align-items:center;justify-content:center;font-size:12px;color:white;font-weight:700}
+.header-logo{width:26px;height:26px;border-radius:6px;background:linear-gradient(135deg,#667eea,#764ba2);display:flex;align-items:center;justify-content:center;font-size:13px;color:white;font-weight:700}
 .header-title{font-weight:600;font-size:13px}
-.icon-btn{background:none;border:none;color:var(--vscode-descriptionForeground);cursor:pointer;padding:6px 8px;border-radius:4px;font-size:12px}
+.header-right{display:flex;gap:6px;align-items:center}
+.icon-btn{background:none;border:none;color:var(--vscode-descriptionForeground);cursor:pointer;padding:5px 8px;border-radius:4px;font-size:12px;white-space:nowrap}
 .icon-btn:hover{background:var(--vscode-list-hoverBackground);color:var(--vscode-editor-foreground)}
-.model-selector{background:var(--vscode-dropdown-background);color:var(--vscode-dropdown-foreground);border:1px solid var(--vscode-dropdown-border);border-radius:4px;padding:4px 8px;font-size:11px;font-family:var(--vscode-font-family);cursor:pointer;outline:none;max-width:200px}
-.model-selector:hover{background:var(--vscode-dropdown-listBackground)}
-.model-selector:focus{border-color:var(--vscode-focusBorder)}
-.status-bar{padding:6px 16px;font-size:11px;color:var(--vscode-descriptionForeground);border-bottom:1px solid var(--vscode-panel-border);display:flex;align-items:center;gap:8px}
+.status-bar{padding:5px 16px;font-size:11px;color:var(--vscode-descriptionForeground);border-bottom:1px solid var(--vscode-panel-border);display:flex;align-items:center;gap:8px}
 .status-model{margin-left:auto;font-family:var(--vscode-editor-font-family);font-size:10px;opacity:0.8}
 .status-dot{width:7px;height:7px;border-radius:50%}
 .status-dot.online{background:#4caf50;box-shadow:0 0 4px #4caf50}.status-dot.offline{background:#f44336}
-.context-bar{padding:8px 16px;border-bottom:1px solid var(--vscode-panel-border);display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.context-bar{padding:6px 16px;border-bottom:1px solid var(--vscode-panel-border);display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .context-bar:empty{display:none}
 .context-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:12px;background:var(--vscode-badge-background);color:var(--vscode-badge-foreground);font-size:11px;font-family:var(--vscode-editor-font-family)}
 .chip-remove{cursor:pointer;opacity:.5;font-size:10px}.chip-remove:hover{opacity:1}
+.agent-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;line-height:1}
+.agent-badge.coder{background:#264f78;color:#7cc6fe}.agent-badge.reviewer{background:#4a3728;color:#e8a56d}
+.agent-badge.planner{background:#2d4a3e;color:#6dc9a0}.agent-badge.documenter{background:#3b2d4a;color:#c49de8}
+.agent-badge.quick{background:#4a4a2d;color:#e8e06d}.agent-badge.auto{background:#3b3b3b;color:#ccc}
+.orchestrator-status{padding:6px 16px;font-size:11px;color:var(--vscode-descriptionForeground);border-bottom:1px solid var(--vscode-panel-border);display:none;align-items:center;gap:8px;background:var(--vscode-editorWidget-background)}
+.orchestrator-status.visible{display:flex}
+.orchestrator-status .agent-thinking{display:inline-flex;align-items:center;gap:6px}
+.workflow-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;font-size:10px;background:var(--vscode-badge-background);color:var(--vscode-badge-foreground)}
+.tool-panel{border-bottom:1px solid var(--vscode-panel-border);max-height:120px;overflow-y:auto;font-size:11px;display:none}
+.tool-panel.visible{display:block}
+.tool-panel-header{display:flex;align-items:center;justify-content:space-between;padding:4px 12px;background:var(--vscode-sideBar-background);border-bottom:1px solid var(--vscode-panel-border);font-weight:600;font-size:10px;cursor:pointer;user-select:none;color:var(--vscode-descriptionForeground)}
+.tool-panel-header:hover{background:var(--vscode-list-hoverBackground)}
+.tool-log{padding:2px 0}
+.tool-entry{display:flex;align-items:center;gap:8px;padding:2px 12px;font-family:var(--vscode-editor-font-family);font-size:11px}
+.tool-entry:hover{background:var(--vscode-list-hoverBackground)}
+.tool-icon{font-size:10px;width:14px;text-align:center}
+.tool-icon.success{color:#4caf50}.tool-icon.error{color:#f44336}.tool-icon.running{color:var(--vscode-focusBorder);animation:sp 1s linear infinite}
+.tool-name{color:var(--vscode-textLink-foreground);font-weight:500}
+.tool-duration{color:var(--vscode-disabledForeground);margin-left:auto;font-size:10px}
 .messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:4px}
 .message{border-radius:8px;padding:12px 16px;max-width:100%;animation:fi .2s ease}
 @keyframes fi{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
@@ -799,60 +963,89 @@ body{font-family:var(--vscode-font-family);color:var(--vscode-editor-foreground)
 .file-picker{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:100;display:flex;align-items:flex-start;justify-content:center;padding-top:60px}
 .file-picker-dialog{background:var(--vscode-editorWidget-background);border:1px solid var(--vscode-panel-border);border-radius:12px;width:90%;max-width:500px;max-height:400px;display:flex;flex-direction:column}
 .file-picker-search{padding:12px;border-bottom:1px solid var(--vscode-panel-border)}
-.file-picker-search input{width:100%;padding:8px 12px;border:1px solid var(--vscode-input-border);border-radius:4px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);font-family:var(--vscode-editor-font-family);font-size:13px;outline:none}
+.file-picker-search input{width:100%;padding:8px 12px;border:1px solid var(--vscode-input-border);border-radius:4px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);font-family:var(--vscode-editor-font-family);font-size:13px;outline:none;box-sizing:border-box}
 .file-picker-search input:focus{border-color:var(--vscode-focusBorder)}
 .file-picker-list{flex:1;overflow-y:auto;padding:4px}
 .file-picker-item{padding:6px 12px;cursor:pointer;border-radius:4px;font-family:var(--vscode-editor-font-family);font-size:12px;color:var(--vscode-descriptionForeground)}
 .file-picker-item:hover{background:var(--vscode-list-hoverBackground);color:var(--vscode-editor-foreground)}
 .file-picker-item.selected{color:#4caf50}
 .input-area{border-top:1px solid var(--vscode-panel-border);padding:12px 16px;background:var(--vscode-sideBar-background)}
-.mode-tabs{display:flex;margin-bottom:10px;border-radius:4px;overflow:hidden;border:1px solid var(--vscode-panel-border);width:fit-content}
-.mode-tab{padding:4px 16px;border:none;background:transparent;color:var(--vscode-descriptionForeground);cursor:pointer;font-size:11px;font-family:var(--vscode-font-family)}
-.mode-tab:not(:last-child){border-right:1px solid var(--vscode-panel-border)}
-.mode-tab.active{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}
 .input-row{display:flex;gap:8px;align-items:flex-end}
-.input-wrapper{flex:1}
-.input-wrapper textarea{width:100%;min-height:42px;max-height:160px;padding:10px 14px;border:1px solid var(--vscode-input-border);border-radius:8px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);font-family:var(--vscode-font-family);font-size:13px;resize:none;outline:none;line-height:1.5}
+.input-wrapper{flex:1;position:relative}
+.input-wrapper textarea{width:100%;min-height:44px;max-height:160px;padding:10px 14px;border:1px solid var(--vscode-input-border);border-radius:10px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);font-family:var(--vscode-font-family);font-size:13px;resize:none;outline:none;line-height:1.5;box-sizing:border-box}
 .input-wrapper textarea:focus{border-color:var(--vscode-focusBorder)}
-.send-btn{padding:10px 20px;background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;min-width:70px}
+.send-btn{padding:10px 20px;background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;border-radius:10px;cursor:pointer;font-size:13px;font-weight:500;min-width:70px}
 .send-btn:hover{background:var(--vscode-button-hoverBackground)}.send-btn:disabled{opacity:.5}.send-btn.cancel{background:#f44336}
-.input-footer{display:flex;justify-content:space-between;margin-top:8px;font-size:10px;color:var(--vscode-disabledForeground)}
+.input-footer{display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:10px;color:var(--vscode-disabledForeground)}
+.input-footer-left{display:flex;align-items:center;gap:4px}
+.auto-badge{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:8px;font-size:9px;background:linear-gradient(135deg,#667eea22,#764ba222);color:var(--vscode-descriptionForeground);border:1px solid var(--vscode-panel-border)}
+.auto-badge-dot{width:5px;height:5px;border-radius:50%;background:linear-gradient(135deg,#667eea,#764ba2)}
+.model-link{color:var(--vscode-textLink-foreground);cursor:pointer;font-size:10px;text-decoration:none;opacity:0.7}
+.model-link:hover{opacity:1;text-decoration:underline}
+.model-picker{position:absolute;bottom:100%;left:0;right:0;background:var(--vscode-editorWidget-background);border:1px solid var(--vscode-panel-border);border-radius:8px;margin-bottom:4px;max-height:200px;overflow-y:auto;display:none;z-index:50;box-shadow:0 -4px 12px rgba(0,0,0,.2)}
+.model-picker.visible{display:block}
+.model-picker-item{padding:6px 12px;cursor:pointer;font-size:12px;font-family:var(--vscode-editor-font-family);color:var(--vscode-descriptionForeground)}
+.model-picker-item:hover{background:var(--vscode-list-hoverBackground);color:var(--vscode-editor-foreground)}
+.model-picker-item.active{color:var(--vscode-textLink-foreground);font-weight:600}
 .welcome{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:16px;padding:40px 20px;text-align:center}
-.welcome-logo{width:48px;height:48px;border-radius:8px;background:linear-gradient(135deg,#667eea,#764ba2);display:flex;align-items:center;justify-content:center;font-size:24px;color:white;font-weight:700}
-.welcome h2{font-size:16px;font-weight:600}.welcome p{color:var(--vscode-descriptionForeground);font-size:13px;max-width:360px;line-height:1.5}
-.welcome-shortcuts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;width:100%;max-width:400px}
-.shortcut-card{padding:10px 12px;border-radius:8px;border:1px solid var(--vscode-panel-border);background:var(--vscode-editorWidget-background);text-align:left;cursor:pointer}
+.welcome-logo{width:52px;height:52px;border-radius:10px;background:linear-gradient(135deg,#667eea,#764ba2);display:flex;align-items:center;justify-content:center;font-size:26px;color:white;font-weight:700}
+.welcome h2{font-size:17px;font-weight:600;margin:0}.welcome p{color:var(--vscode-descriptionForeground);font-size:13px;max-width:380px;line-height:1.5;margin:0}
+.welcome-shortcuts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;width:100%;max-width:420px}
+.shortcut-card{padding:12px 14px;border-radius:8px;border:1px solid var(--vscode-panel-border);background:var(--vscode-editorWidget-background);text-align:left;cursor:pointer;transition:border-color .15s}
 .shortcut-card:hover{border-color:var(--vscode-focusBorder)}
+.shortcut-card-icon{font-size:16px;margin-bottom:4px}
 .shortcut-card-title{font-size:12px;font-weight:600;margin-bottom:2px}
 .shortcut-card-desc{font-size:10px;color:var(--vscode-disabledForeground)}
 ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(128,128,128,.3);border-radius:3px}
 </style></head><body>
-<div class="header"><div class="header-left"><div class="header-logo">T</div><span class="header-title">TestFire AI</span></div><div style="display:flex;gap:8px;align-items:center"><select class="model-selector" id="modelSelector" title="Select Model"><option value="">Loading models...</option></select><button class="icon-btn" id="btnAddFiles">+ Files</button><button class="icon-btn" id="btnNewSession">New Chat</button></div></div>
+<div class="header">
+  <div class="header-left"><div class="header-logo">T</div><span class="header-title">TestFire AI</span></div>
+  <div class="header-right">
+    <button class="icon-btn" id="btnAddFiles" title="Add context files">+ Files</button>
+    <button class="icon-btn" id="btnNewSession" title="Start new chat">New Chat</button>
+  </div>
+</div>
 <div class="status-bar"><span class="status-dot" id="statusDot"></span><span id="statusText">Connecting...</span><span class="status-model" id="statusModel"></span></div>
 <div class="context-bar" id="contextBar"></div>
-<div class="messages" id="messages"><div class="welcome" id="welcome"><div class="welcome-logo">T</div><h2>TestFire AI Assistant</h2><p>Your intelligent coding companion. Ask questions, get code suggestions, or let the agent handle complex tasks.</p><div class="welcome-shortcuts"><div class="shortcut-card" data-action="Explain the selected code"><div class="shortcut-card-title">Explain Code</div><div class="shortcut-card-desc">Select code, then click</div></div><div class="shortcut-card" data-action="Find bugs and issues"><div class="shortcut-card-title">Find Bugs</div><div class="shortcut-card-desc">Detect issues</div></div><div class="shortcut-card" data-action="Refactor this code"><div class="shortcut-card-title">Refactor</div><div class="shortcut-card-desc">Improve quality</div></div><div class="shortcut-card" data-action="Write unit tests"><div class="shortcut-card-title">Add Tests</div><div class="shortcut-card-desc">Generate tests</div></div></div></div></div>
-<div class="input-area"><div class="mode-tabs"><button class="mode-tab active" id="tabChat">Chat</button><button class="mode-tab" id="tabAgent">Agent</button></div><div class="input-row"><div class="input-wrapper"><textarea id="userInput" placeholder="Ask anything about your code..." rows="1"></textarea></div><button class="send-btn" id="sendBtn">Send</button></div><div class="input-footer"><span>Enter to send</span><span id="modeLabel">Chat mode</span></div></div>
+<div class="orchestrator-status" id="orchStatus"><span class="agent-thinking" id="orchText"></span></div>
+<div class="tool-panel" id="toolPanel"><div class="tool-panel-header" id="toolPanelHeader">Tools <span id="toolCount">(0)</span></div><div class="tool-log" id="toolLog"></div></div>
+<div class="messages" id="messages">
+  <div class="welcome" id="welcome">
+    <div class="welcome-logo">T</div>
+    <h2>TestFire AI</h2>
+    <p>Just type what you need. I auto-detect your intent and route to the best agent and workflow.</p>
+    <div class="welcome-shortcuts">
+      <div class="shortcut-card" data-action="Explain the selected code"><div class="shortcut-card-icon">&#128269;</div><div class="shortcut-card-title">Explain Code</div><div class="shortcut-card-desc">Understand selected code</div></div>
+      <div class="shortcut-card" data-action="Find bugs and issues in this code"><div class="shortcut-card-icon">&#128027;</div><div class="shortcut-card-title">Find Bugs</div><div class="shortcut-card-desc">Detect issues &amp; problems</div></div>
+      <div class="shortcut-card" data-action="Refactor this code for better quality"><div class="shortcut-card-icon">&#9881;</div><div class="shortcut-card-title">Refactor</div><div class="shortcut-card-desc">Improve code quality</div></div>
+      <div class="shortcut-card" data-action="Write unit tests for this code"><div class="shortcut-card-icon">&#9989;</div><div class="shortcut-card-title">Add Tests</div><div class="shortcut-card-desc">Generate test coverage</div></div>
+    </div>
+  </div>
+</div>
+<div class="input-area">
+  <div class="input-row"><div class="input-wrapper"><textarea id="userInput" placeholder="Ask anything... I'll auto-detect and route to the right agent" rows="1"></textarea><div class="model-picker" id="modelPicker"></div></div><button class="send-btn" id="sendBtn">Send</button></div>
+  <div class="input-footer"><div class="input-footer-left"><span class="auto-badge"><span class="auto-badge-dot"></span> Auto</span><span>Enter to send</span></div><span class="model-link" id="modelLink" title="Click to change model">model: loading...</span></div>
+</div>
 <div class="file-picker" id="filePicker" style="display:none"><div class="file-picker-dialog"><div class="file-picker-search"><input type="text" id="fileSearchInput" placeholder="Search files..."></div><div class="file-picker-list" id="filePickerList"></div></div></div>
 <script nonce="${nonce}">
-var V=acquireVsCodeApi(),mode='chat',streaming=false,ctxFiles=[],allFiles=[],currentModel='';
-var $m=document.getElementById('messages'),$w=document.getElementById('welcome'),$i=document.getElementById('userInput'),$s=document.getElementById('sendBtn'),$cb=document.getElementById('contextBar'),$fp=document.getElementById('filePicker'),$fl=document.getElementById('filePickerList'),$fs=document.getElementById('fileSearchInput'),$sd=document.getElementById('statusDot'),$st=document.getElementById('statusText'),$sm=document.getElementById('statusModel'),$ms=document.getElementById('modelSelector');
+var V=acquireVsCodeApi(),streaming=false,ctxFiles=[],allFiles=[],currentModel='',toolInvocations=[];
+var $m=document.getElementById('messages'),$w=document.getElementById('welcome'),$i=document.getElementById('userInput'),$s=document.getElementById('sendBtn'),$cb=document.getElementById('contextBar'),$fp=document.getElementById('filePicker'),$fl=document.getElementById('filePickerList'),$fs=document.getElementById('fileSearchInput'),$sd=document.getElementById('statusDot'),$st=document.getElementById('statusText'),$sm=document.getElementById('statusModel'),$tp=document.getElementById('toolPanel'),$tl=document.getElementById('toolLog'),$tc=document.getElementById('toolCount'),$os=document.getElementById('orchStatus'),$ot=document.getElementById('orchText'),$mp=document.getElementById('modelPicker'),$ml=document.getElementById('modelLink');
 V.postMessage({type:'ready'});
 V.postMessage({type:'listModels'});
 document.getElementById('btnAddFiles').addEventListener('click',function(){V.postMessage({type:'getFileTree'})});
-document.getElementById('btnNewSession').addEventListener('click',function(){V.postMessage({type:'newSession'});$m.innerHTML='';if($w){$m.appendChild($w);$w.style.display=''}});
-document.getElementById('tabChat').addEventListener('click',function(){setMode('chat')});
-document.getElementById('tabAgent').addEventListener('click',function(){setMode('agent')});
+document.getElementById('btnNewSession').addEventListener('click',function(){V.postMessage({type:'newSession'});$m.innerHTML='';if($w){$m.appendChild($w);$w.style.display=''}toolInvocations=[];$tl.innerHTML='';$tc.textContent='(0)';$os.classList.remove('visible')});
+document.getElementById('toolPanelHeader').addEventListener('click',function(){$tl.style.display=$tl.style.display==='none'?'block':'none'});
 $s.addEventListener('click',function(){handleSend()});
-$ms.addEventListener('change',function(){var model=this.value;if(model&&model!==currentModel){V.postMessage({type:'selectModel',model:model})}});
+$ml.addEventListener('click',function(e){e.stopPropagation();$mp.classList.toggle('visible')});
+document.addEventListener('click',function(e){if(!e.target.closest('.model-picker')&&!e.target.closest('.model-link'))$mp.classList.remove('visible')});
 $fp.addEventListener('click',function(e){if(e.target===$fp)$fp.style.display='none'});
 $fs.addEventListener('input',function(){filterFiles(this.value)});
 document.querySelectorAll('.shortcut-card[data-action]').forEach(function(c){c.addEventListener('click',function(){$i.value=this.dataset.action;$i.focus()})});
 document.addEventListener('click',function(e){var b=e.target.closest('.code-copy-btn');if(b){var c=b.closest('.code-block-wrapper').querySelector('code').textContent;navigator.clipboard.writeText(c).then(function(){b.textContent='Copied!';setTimeout(function(){b.textContent='Copy'},1500)});return}var a=e.target.closest('.code-apply-btn');if(a){a.textContent='Applying...';a.disabled=true;return}var ap=e.target.closest('[data-accept-plan]');if(ap){V.postMessage({type:'acceptPlan',planId:ap.dataset.acceptPlan});return}var rp=e.target.closest('[data-reject-plan]');if(rp){V.postMessage({type:'rejectPlan',planId:rp.dataset.rejectPlan});setStreaming(false)}});
 $i.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleSend()}});
 $i.addEventListener('input',function(){$i.style.height='auto';$i.style.height=Math.min($i.scrollHeight,160)+'px'});
-function handleSend(){var t=$i.value.trim();if(!t||streaming)return;if($w)$w.style.display='none';if(mode==='agent'){V.postMessage({type:'executeAgent',goal:t})}else{V.postMessage({type:'sendMessage',content:t,contextFiles:ctxFiles})}appendMessage('user',t);$i.value='';$i.style.height='auto';setStreaming(true)}
+function handleSend(){var t=$i.value.trim();if(!t||streaming)return;if($w)$w.style.display='none';V.postMessage({type:'sendMessage',content:t,contextFiles:ctxFiles});appendMessage('user',t);$i.value='';$i.style.height='auto';setStreaming(true)}
 function setStreaming(on){streaming=on;$s.disabled=false;if(on){$s.textContent='Stop';$s.className='send-btn cancel';$s.onclick=function(){V.postMessage({type:'cancelRequest'});setStreaming(false)}}else{$s.textContent='Send';$s.className='send-btn';$s.onclick=handleSend}}
-function setMode(m){mode=m;document.getElementById('tabChat').classList.toggle('active',m==='chat');document.getElementById('tabAgent').classList.toggle('active',m==='agent');document.getElementById('modeLabel').textContent=m==='chat'?'Chat mode':'Agent mode';$i.placeholder=m==='chat'?'Ask anything...':'Describe a task...';$i.focus()}
 function appendMessage(role,content,id){if($w)$w.style.display='none';var d=document.createElement('div');d.className='message '+role;if(id)d.id='msg-'+id;var h=document.createElement('div');h.className='msg-header';var av=document.createElement('div');av.className='msg-avatar '+(role==='user'?'user-avatar':'ai-avatar');av.textContent=role==='user'?'U':'T';var n=document.createElement('span');n.className='msg-name';n.textContent=role==='user'?'You':'TestFire AI';var t=document.createElement('span');t.className='msg-time';t.textContent=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});h.appendChild(av);h.appendChild(n);h.appendChild(t);var b=document.createElement('div');b.className='msg-body';if(content)b.innerHTML=renderMd(content);d.appendChild(h);d.appendChild(b);$m.appendChild(d);$m.scrollTop=$m.scrollHeight;return d}
 function esc(t){var d=document.createElement('div');d.textContent=t;return d.innerHTML}
 function renderMd(t){if(!t)return'';var cb=[];t=t.replace(/\x60\x60\x60(\\w*)\\n([\\s\\S]*?)\x60\x60\x60/g,function(m,l,c){var i=cb.length;cb.push({l:l,c:c});return'%%CB'+i+'%%'});t=esc(t);cb.forEach(function(b,i){var ec=esc(b.c);var hdr='';var fp=ec.match(/^\\/\\/\\s*filepath:\\s*(.+)\\n/);if(fp)hdr='<span class="code-block-filepath">'+fp[1].trim()+'</span>';else if(b.l)hdr='<span style="font-family:var(--vscode-editor-font-family);text-transform:uppercase;letter-spacing:.5px">'+b.l+'</span>';var ab=fp?'<button class="code-apply-btn" data-filepath="'+fp[1].trim()+'">Apply</button>':'';t=t.replace('%%CB'+i+'%%','<div class="code-block-wrapper"><div class="code-block-header">'+(hdr||'<span></span>')+'<span>'+ab+'<button class="code-copy-btn">Copy</button></span></div><pre><code>'+ec+'</code></pre></div>')});t=t.replace(/\x60([^\x60]+)\x60/g,'<code>$1</code>');t=t.replace(/\\*\\*(.+?)\\*\\*/g,'<strong>$1</strong>');t=t.replace(/^- (.+)$/gm,'<li>$1</li>');t=t.replace(/\\n\\n/g,'</p><p>');t='<p>'+t+'</p>';t=t.replace(/\\n/g,'<br>');return t}
@@ -861,9 +1054,13 @@ function showFilePicker(tree){allFiles=[];flattenTree(tree,'');renderFileList(al
 function flattenTree(n,p){if(n.type==='file')allFiles.push(p+n.name);else if(n.children){var pp=p?p+n.name+'/':'';n.children.forEach(function(c){flattenTree(c,pp)})}}
 function renderFileList(files){$fl.innerHTML='';files.slice(0,100).forEach(function(f){var d=document.createElement('div');d.className='file-picker-item'+(ctxFiles.includes(f)?' selected':'');d.textContent=f;d.onclick=function(){if(ctxFiles.includes(f))V.postMessage({type:'removeContextFile',filePath:f});else V.postMessage({type:'addContextFile',filePath:f});d.classList.toggle('selected')};$fl.appendChild(d)})}
 function filterFiles(q){var l=q.toLowerCase();renderFileList(l?allFiles.filter(function(f){return f.toLowerCase().includes(l)}):allFiles)}
+function renderModelPicker(models){$mp.innerHTML='';models.forEach(function(m){var d=document.createElement('div');d.className='model-picker-item'+(m===currentModel?' active':'');d.textContent=m;d.onclick=function(){if(m!==currentModel){V.postMessage({type:'selectModel',model:m})}$mp.classList.remove('visible')};$mp.appendChild(d)})}
 function renderPlan(plan){setStreaming(true);var el=document.getElementById('plan-'+plan.id);if(!el){if($w)$w.style.display='none';el=document.createElement('div');el.className='message assistant';el.id='plan-'+plan.id;$m.appendChild(el)}var h='<div class="agent-plan"><div class="plan-header"><div class="plan-header-icon">A</div><span>Agent Plan</span></div><div style="margin-bottom:10px;color:var(--vscode-descriptionForeground);font-size:12px">'+esc(plan.goal)+'</div><ul class="plan-steps">';plan.steps.forEach(function(s){var ic={pending:'&#9675;',running:'&#8635;',completed:'&#10003;',failed:'&#10007;',skipped:'&#8212;'};h+='<li class="plan-step" id="step-'+plan.id+'-'+s.id+'"><span class="step-indicator '+s.status+'">'+(ic[s.status]||'')+'</span><span class="step-text">'+esc(s.description)+'</span></li>'});h+='</ul>';if(plan.status==='planning'||plan.status==='awaiting_approval')h+='<div class="plan-actions"><button class="action-btn primary" data-accept-plan="'+plan.id+'">Execute Plan</button><button class="action-btn danger" data-reject-plan="'+plan.id+'">Cancel</button></div>';h+='</div>';el.innerHTML=h;$m.scrollTop=$m.scrollHeight}
 function updateStep(pid,sid,status,result){var el=document.getElementById('step-'+pid+'-'+sid);if(!el)return;var ind=el.querySelector('.step-indicator');ind.className='step-indicator '+status;var ic={pending:'&#9675;',running:'&#8635;',completed:'&#10003;',failed:'&#10007;',skipped:'&#8212;'};ind.innerHTML=ic[status]||'';if(result){var r=el.querySelector('.step-result');if(!r){r=document.createElement('div');r.className='step-result';el.querySelector('.step-text').appendChild(r)}r.textContent=result}$m.scrollTop=$m.scrollHeight}
-window.addEventListener('message',function(e){var msg=e.data;switch(msg.type){case'streamToken':{var el=document.getElementById('msg-'+msg.messageId);if(!el){el=appendMessage('assistant','',msg.messageId);var ind=document.createElement('div');ind.className='typing-indicator';ind.id='typing-'+msg.messageId;ind.innerHTML='<div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>';el.appendChild(ind)}el.querySelector('.msg-body').textContent+=msg.token;$m.scrollTop=$m.scrollHeight;break}case'streamComplete':{setStreaming(false);var el=document.getElementById('msg-'+msg.messageId);if(!el)break;var ty=document.getElementById('typing-'+msg.messageId);if(ty)ty.remove();el.querySelector('.msg-body').innerHTML=renderMd(msg.content);if(msg.actions&&msg.actions.length>0){var bar=document.createElement('div');bar.className='actions-bar';msg.actions.forEach(function(a,idx){var btn=document.createElement('button');btn.className='action-btn';btn.textContent='Apply: '+a.description;btn.onclick=function(){V.postMessage({type:'applyAction',messageId:msg.messageId,actionIndex:idx})};bar.appendChild(btn)});if(msg.actions.length>1){var ab=document.createElement('button');ab.className='action-btn primary';ab.textContent='Apply All';ab.onclick=function(){V.postMessage({type:'applyAllActions',messageId:msg.messageId})};bar.appendChild(ab)}el.appendChild(bar)}$m.scrollTop=$m.scrollHeight;break}case'streamError':{setStreaming(false);var el=document.getElementById('msg-'+msg.messageId);if(el){var ty=document.getElementById('typing-'+msg.messageId);if(ty)ty.remove();el.querySelector('.msg-body').innerHTML='<p style="color:#f44336">Error: '+esc(msg.error)+'</p>'}break}case'chatHistory':{$m.innerHTML='';if(!msg.messages.length&&$w){$m.appendChild($w);$w.style.display=''}else msg.messages.forEach(function(m){appendMessage(m.role,m.content,m.id)});break}case'providerStatus':{$sd.className='status-dot '+(msg.available?'online':'offline');$st.textContent=msg.available?msg.provider+' connected':msg.provider+' unavailable';if(msg.model){$sm.textContent='Model: '+msg.model;currentModel=msg.model}break}case'contextUpdate':{ctxFiles=msg.files;renderContextBar();break}case'fileTree':{showFilePicker(msg.tree);break}case'agentPlan':{renderPlan(msg.plan);break}case'agentStepUpdate':{updateStep(msg.planId,msg.stepId,msg.status,msg.result);break}case'agentComplete':{setStreaming(false);appendMessage('assistant','Agent completed.\\n\\n'+msg.summary);break}case'modelList':{$ms.innerHTML='';msg.models.forEach(function(m){var opt=document.createElement('option');opt.value=m;opt.textContent=m;if(m===currentModel)opt.selected=true;$ms.appendChild(opt)});break}case'modelChanged':{currentModel=msg.model;$sm.textContent='Model: '+msg.model;$ms.value=msg.model;break}}});
+window.addEventListener('message',function(e){var msg=e.data;switch(msg.type){case'streamToken':{var el=document.getElementById('msg-'+msg.messageId);if(!el){el=appendMessage('assistant','',msg.messageId);var ind=document.createElement('div');ind.className='typing-indicator';ind.id='typing-'+msg.messageId;ind.innerHTML='<div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>';el.appendChild(ind)}el.querySelector('.msg-body').textContent+=msg.token;$m.scrollTop=$m.scrollHeight;break}case'streamComplete':{setStreaming(false);var el=document.getElementById('msg-'+msg.messageId);if(!el)break;var ty=document.getElementById('typing-'+msg.messageId);if(ty)ty.remove();el.querySelector('.msg-body').innerHTML=renderMd(msg.content);if(msg.actions&&msg.actions.length>0){var bar=document.createElement('div');bar.className='actions-bar';msg.actions.forEach(function(a,idx){var btn=document.createElement('button');btn.className='action-btn';btn.textContent='Apply: '+a.description;btn.onclick=function(){V.postMessage({type:'applyAction',messageId:msg.messageId,actionIndex:idx})};bar.appendChild(btn)});if(msg.actions.length>1){var ab=document.createElement('button');ab.className='action-btn primary';ab.textContent='Apply All';ab.onclick=function(){V.postMessage({type:'applyAllActions',messageId:msg.messageId})};bar.appendChild(ab)}el.appendChild(bar)}$m.scrollTop=$m.scrollHeight;break}case'streamError':{setStreaming(false);var el=document.getElementById('msg-'+msg.messageId);if(el){var ty=document.getElementById('typing-'+msg.messageId);if(ty)ty.remove();el.querySelector('.msg-body').innerHTML='<p style="color:#f44336">Error: '+esc(msg.error)+'</p>'}break}case'chatHistory':{$m.innerHTML='';if(!msg.messages.length&&$w){$m.appendChild($w);$w.style.display=''}else msg.messages.forEach(function(m){appendMessage(m.role,m.content,m.id)});break}case'providerStatus':{$sd.className='status-dot '+(msg.available?'online':'offline');$st.textContent=msg.available?msg.provider+' connected':msg.provider+' unavailable';if(msg.model){$sm.textContent=msg.model;currentModel=msg.model;$ml.textContent='model: '+msg.model}break}case'contextUpdate':{ctxFiles=msg.files;renderContextBar();break}case'fileTree':{showFilePicker(msg.tree);break}case'agentPlan':{renderPlan(msg.plan);break}case'agentStepUpdate':{updateStep(msg.planId,msg.stepId,msg.status,msg.result);break}case'agentComplete':{setStreaming(false);appendMessage('assistant','Agent completed.\\n\\n'+msg.summary);break}case'modelList':{renderModelPicker(msg.models);if(msg.models.length&&!currentModel){$ml.textContent='model: '+msg.models[0]}break}case'modelChanged':{currentModel=msg.model;$sm.textContent=msg.model;$ml.textContent='model: '+msg.model;renderModelPicker([]);V.postMessage({type:'listModels'});break}case'agentList':{break}case'toolList':{break}case'orchestratorEvent':{handleOrchestratorEvent(msg.event);break}case'agentThinking':{$os.classList.add('visible');$ot.innerHTML='<span class="agent-badge '+msg.role+'">'+esc(msg.role)+'</span> is thinking...';break}case'agentResponse':{$os.classList.remove('visible');break}case'workflowResult':{setStreaming(false);if(msg.result&&msg.result.toolInvocations){msg.result.toolInvocations.forEach(function(inv){addToolEntry(inv)})}break}}});
+function handleOrchestratorEvent(ev){if(!ev)return;if(ev.type==='agent_start'&&ev.agentId){$os.classList.add('visible');var role=(ev.data&&ev.data.role)||ev.agentId;$ot.innerHTML='<span class="agent-badge '+esc(role)+'">'+esc(role)+'</span> is working...'}if(ev.type==='agent_complete'){$os.classList.remove('visible')}if(ev.type==='tool_invoke'&&ev.data){addToolEntry(ev.data)}if(ev.type==='tool_complete'&&ev.data){updateToolEntry(ev.data)}}
+function addToolEntry(inv){toolInvocations.push(inv);$tc.textContent='('+toolInvocations.length+')';var e=document.createElement('div');e.className='tool-entry';e.id='tool-'+inv.timestamp;var icon=inv.result?((inv.result.success)?'&#10003;':'&#10007;'):'&#8635;';var cls=inv.result?((inv.result.success)?'success':'error'):'running';e.innerHTML='<span class="tool-icon '+cls+'">'+icon+'</span><span class="tool-name">'+esc(inv.toolName)+'</span>'+(inv.durationMs?'<span class="tool-duration">'+inv.durationMs+'ms</span>':'');$tl.insertBefore(e,$tl.firstChild);$tp.classList.add('visible')}
+function updateToolEntry(inv){var e=document.getElementById('tool-'+inv.timestamp);if(e&&inv.result){var icon=inv.result.success?'&#10003;':'&#10007;';var cls=inv.result.success?'success':'error';e.querySelector('.tool-icon').className='tool-icon '+cls;e.querySelector('.tool-icon').innerHTML=icon;if(inv.durationMs){var dur=e.querySelector('.tool-duration');if(!dur){dur=document.createElement('span');dur.className='tool-duration';e.appendChild(dur)}dur.textContent=inv.durationMs+'ms'}}}
 </script></body></html>`;
   }
 

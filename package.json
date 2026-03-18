@@ -407,6 +407,46 @@
           "type": "boolean",
           "default": true,
           "description": "Prefer cost-effective models when routing"
+        },
+        "testfire.agents.coderModel": {
+          "type": "string",
+          "default": "deepseek-coder:6.7b",
+          "description": "Model for the coder agent (code generation, editing)"
+        },
+        "testfire.agents.reviewerModel": {
+          "type": "string",
+          "default": "codellama:7b",
+          "description": "Model for the reviewer agent (code review, bug detection)"
+        },
+        "testfire.agents.plannerModel": {
+          "type": "string",
+          "default": "qwen2:7b",
+          "description": "Model for the planner agent (architecture, task decomposition)"
+        },
+        "testfire.agents.documenterModel": {
+          "type": "string",
+          "default": "llama3:8b",
+          "description": "Model for the documenter agent (docs, comments, explanations)"
+        },
+        "testfire.agents.quickModel": {
+          "type": "string",
+          "default": "phi:2.7b",
+          "description": "Model for the quick agent (fast responses, simple tasks)"
+        },
+        "testfire.knowledge.autoIndex": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically index workspace for knowledge base on startup"
+        },
+        "testfire.knowledge.maxFiles": {
+          "type": "number",
+          "default": 500,
+          "description": "Maximum number of files to index for the knowledge base"
+        },
+        "testfire.tools.requireApproval": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require user approval for write operations and terminal commands"
         }
       }
     }

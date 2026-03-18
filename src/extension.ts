@@ -20,6 +20,15 @@ import { TestFireHoverProvider } from './providers/HoverProvider';
 import { TestFireCompletionProvider } from './providers/CompletionProvider';
 import { Logger } from './utils/Logger';
 
+// ─── Multi-Agent Architecture ────────────────────────────────────────────────
+import { ToolRegistry } from './tools/ToolRegistry';
+import { registerFileSystemTools } from './tools/FileSystemTools';
+import { registerCodeAnalysisTools } from './tools/CodeAnalysisTools';
+import { registerTerminalTools } from './tools/TerminalTools';
+import { registerProjectTools } from './tools/ProjectTools';
+import { AgentOrchestrator } from './orchestrator/AgentOrchestrator';
+import { KnowledgeBase } from './knowledge/KnowledgeBase';
+
 // ─── Existing Providers & Features ───────────────────────────────────────────
 import { createProvider } from './providers/aiProvider';
 import { ChatPanel } from './views/chatPanel';
@@ -106,6 +115,32 @@ export function activate(context: vscode.ExtensionContext) {
     contextBuilder,
     taskExecutor,
   );
+
+  // ─── Multi-Agent System ────────────────────────────────────────────────
+
+  // Tool registry
+  const toolRegistry = new ToolRegistry();
+  registerFileSystemTools(toolRegistry, workspaceRoot);
+  registerCodeAnalysisTools(toolRegistry);
+  registerTerminalTools(toolRegistry, workspaceRoot);
+  registerProjectTools(
+    toolRegistry,
+    workspaceRoot,
+    scanner,
+    depGraph,
+    frameworkDetector,
+  );
+  log(
+    `Tool registry: ${toolRegistry.getDefinitions().length} tools registered`,
+  );
+
+  // Knowledge base
+  const knowledgeBase = new KnowledgeBase(provider, workspaceRoot);
+  knowledgeBase.registerTools(toolRegistry);
+
+  // Agent orchestrator
+  const orchestrator = new AgentOrchestrator(provider, toolRegistry);
+  log('Multi-agent orchestrator initialized');
 
   // UI modules
   const progressIndicator = new ProgressIndicator();
@@ -206,6 +241,16 @@ export function activate(context: vscode.ExtensionContext) {
           const branch = await git.getBranch();
           log(`Git repo detected, branch: ${branch}`);
         }
+
+        // Index knowledge base in background
+        knowledgeBase
+          .indexProject()
+          .then(() => {
+            log(`Knowledge base indexed: ${knowledgeBase.chunkCount} chunks`);
+          })
+          .catch((err: any) => {
+            log(`Knowledge base indexing error: ${err.message}`);
+          });
       } catch (err: any) {
         log(`Workspace scanning error: ${err.message}`);
       }
@@ -274,7 +319,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('testfire-dev.openChat', () => {
       log('Opening agent chat panel');
-      AgentChatPanel.createOrShow(
+      const panel = AgentChatPanel.createOrShow(
         context.extensionUri,
         provider,
         context,
@@ -284,6 +329,7 @@ export function activate(context: vscode.ExtensionContext) {
         agentController,
         scanner,
       );
+      panel.connectOrchestrator(orchestrator, knowledgeBase, toolRegistry);
     }),
   );
 
